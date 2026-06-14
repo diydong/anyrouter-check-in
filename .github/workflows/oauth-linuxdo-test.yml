@@ -1,0 +1,129 @@
+name: AnyRouter Linux.do OAuth Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  oauth-linuxdo-test:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - name: Checkout OAuth check-in project
+        uses: actions/checkout@v4
+        with:
+          repository: aceHubert/newapi-ai-check-in
+          path: oauth-checkin
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: oauth-checkin
+        run: uv sync
+
+      - name: Install Camoufox browser
+        working-directory: oauth-checkin
+        run: uv run camoufox fetch
+
+      - name: Restore OAuth storage states
+        uses: actions/cache/restore@v4
+        with:
+          path: oauth-checkin/storage-states
+          key: oauth-linuxdo-storage-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            oauth-linuxdo-storage-${{ runner.os }}-
+
+      - name: Run Linux.do OAuth check-in
+        id: run-checkin
+        working-directory: oauth-checkin
+        env:
+          ACCOUNTS: ${{ secrets.OAUTH_ACCOUNTS }}
+          RUN_LINUXDO_LOGIN_MANUAL: 'true'
+          DEBUG: 'false'
+        shell: pwsh
+        run: |
+          uv run python -u main.py *>&1 | Tee-Object -FilePath oauth-test.log
+          exit $LASTEXITCODE
+
+      - name: Send Feishu alert on failure
+        if: always()
+        working-directory: oauth-checkin
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_RECEIVE_ID: ${{ secrets.FEISHU_RECEIVE_ID }}
+          FEISHU_RECEIVE_ID_TYPE: ${{ secrets.FEISHU_RECEIVE_ID_TYPE }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STEP_OUTCOME: ${{ steps.run-checkin.outcome }}
+        shell: pwsh
+        run: |
+          $log = ""
+          if (Test-Path "oauth-test.log") {
+            $log = Get-Content "oauth-test.log" -Raw
+          }
+
+          $hasFailureText = $log -match "❌|FAILED|failed|Exception|all authentication methods failed"
+          $failed = $env:STEP_OUTCOME -ne "success" -or $hasFailureText
+          if (-not $failed) {
+            Write-Host "No OAuth failure detected; Feishu alert skipped."
+            exit 0
+          }
+
+          if (-not $env:FEISHU_APP_ID -or -not $env:FEISHU_APP_SECRET -or -not $env:FEISHU_RECEIVE_ID) {
+            Write-Host "Feishu app secrets are incomplete; cannot send alert."
+            exit 0
+          }
+
+          $receiveType = if ($env:FEISHU_RECEIVE_ID_TYPE) { $env:FEISHU_RECEIVE_ID_TYPE } else { "user_id" }
+          $tokenBody = @{
+            app_id = $env:FEISHU_APP_ID
+            app_secret = $env:FEISHU_APP_SECRET
+          } | ConvertTo-Json -Compress
+
+          $tokenResp = Invoke-RestMethod `
+            -Method Post `
+            -Uri "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal" `
+            -ContentType "application/json" `
+            -Body $tokenBody
+
+          $snippet = if ($log.Length -gt 3500) { $log.Substring($log.Length - 3500) } else { $log }
+          $text = "AnyRouter Linux.do OAuth 测试失败`nRun: $env:RUN_URL`n`n$snippet"
+          $messageBody = @{
+            receive_id = $env:FEISHU_RECEIVE_ID
+            msg_type = "text"
+            content = (@{ text = $text } | ConvertTo-Json -Compress)
+          } | ConvertTo-Json -Compress
+
+          Invoke-RestMethod `
+            -Method Post `
+            -Uri "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=$receiveType" `
+            -Headers @{ Authorization = "Bearer $($tokenResp.tenant_access_token)" } `
+            -ContentType "application/json" `
+            -Body $messageBody
+
+      - name: Save OAuth storage states
+        if: always() && hashFiles('oauth-checkin/storage-states/*.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: oauth-checkin/storage-states
+          key: oauth-linuxdo-storage-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Upload OAuth logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oauth-linuxdo-test-${{ github.run_id }}
+          path: |
+            oauth-checkin/oauth-test.log
+            oauth-checkin/logs/
+            oauth-checkin/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
