@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import os
+import random
 import sys
 from datetime import datetime
 
@@ -41,6 +42,33 @@ from utils.proxy import get_playwright_proxy, get_proxy_server
 load_dotenv()
 
 BALANCE_HASH_FILE = 'balance_hash.txt'
+SCHEDULED_EVENT_NAME = 'schedule'
+START_DELAY_MIN_SECONDS = 0
+START_DELAY_MAX_SECONDS = 20 * 60
+ACCOUNT_DELAY_MIN_SECONDS = 2 * 60
+ACCOUNT_DELAY_MAX_SECONDS = 8 * 60
+
+
+def random_delay_seconds(min_seconds: int, max_seconds: int) -> int:
+	"""生成随机等待秒数"""
+	if max_seconds <= 0:
+		return 0
+	if min_seconds < 0:
+		min_seconds = 0
+	if max_seconds < min_seconds:
+		max_seconds = min_seconds
+	return random.randint(min_seconds, max_seconds)
+
+
+async def wait_random_delay(label: str, min_seconds: int, max_seconds: int):
+	"""随机等待一段时间, 避免定时任务和账号请求过于集中"""
+	delay_seconds = random_delay_seconds(min_seconds, max_seconds)
+	if delay_seconds <= 0:
+		return
+
+	delay_minutes = delay_seconds / 60
+	print(f'[WAIT] {label}: random delay {delay_seconds}s ({delay_minutes:.1f} min)')
+	await asyncio.sleep(delay_seconds)
 
 
 def load_balance_hash():
@@ -503,6 +531,9 @@ async def main():
 
 	print(f'[INFO] Found {len(accounts)} account configurations')
 
+	if os.getenv('GITHUB_EVENT_NAME') == SCHEDULED_EVENT_NAME:
+		await wait_random_delay('Scheduled run startup', START_DELAY_MIN_SECONDS, START_DELAY_MAX_SECONDS)
+
 	last_balance_hash = load_balance_hash()
 
 	success_count = 0
@@ -516,6 +547,14 @@ async def main():
 	for i, account in enumerate(accounts):
 		account_key = f'account_{i + 1}'
 		try:
+			if i > 0 and os.getenv('GITHUB_EVENT_NAME') == SCHEDULED_EVENT_NAME:
+				account_name = account.get_display_name(i)
+				await wait_random_delay(
+					f'Before processing {account_name}',
+					ACCOUNT_DELAY_MIN_SECONDS,
+					ACCOUNT_DELAY_MAX_SECONDS,
+				)
+
 			success, user_info_before, user_info_after = await check_in_account(account, i, app_config)
 			if success:
 				success_count += 1
