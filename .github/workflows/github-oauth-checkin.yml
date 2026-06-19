@@ -59,6 +59,11 @@ jobs:
           restore-keys: |
             anyrouter-github-oauth-storage-${{ runner.os }}-
 
+      - name: 绑定 AnyRouter Hosts
+        run: |
+          echo "47.246.23.192 anyrouter.top www.anyrouter.top" | sudo tee -a /etc/hosts
+          getent hosts anyrouter.top
+
       - name: 执行 GitHub OAuth 签到
         id: run-checkin
         env:

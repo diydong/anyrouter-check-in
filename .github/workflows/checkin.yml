@@ -81,6 +81,11 @@ jobs:
         restore-keys: |
           browser-profiles-${{ runner.os }}-
 
+    - name: 绑定 AnyRouter Hosts
+      run: |
+        echo "47.246.23.192 anyrouter.top www.anyrouter.top" | sudo tee -a /etc/hosts
+        getent hosts anyrouter.top
+
     - name: 配置代理
       env:
         PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
