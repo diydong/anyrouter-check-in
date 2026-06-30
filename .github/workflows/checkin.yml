@@ -2,7 +2,7 @@ name: AnyRouter 自动签到
 on:
   schedule:
     # Runs daily at 10:17 Asia/Shanghai, then checkin.py adds random jitter.
-    - cron: '17 2 * * *'
+    - cron: '17 2/6 * * *'
   workflow_dispatch:
     inputs:
       debug:
